@@ -1,13 +1,14 @@
 # APEX Wi-Fi Security Toolkit
 
-**APEX v6.0** is a Termux-friendly defensive network auditor built with Python's standard library. No paid API or third-party package is required.
+**APEX v6.1** is a Termux-friendly defensive network auditor built with Python's standard library. No paid API or third-party package is required.
 
 ## Features
 
 - **Network overview:** local IP, default gateway, estimated subnet and read-only ARP cache
 - **DNS diagnostics:** hostname resolution and lookup timing
 - **TLS audit:** certificate validation, TLS version, cipher and certificate expiry
-- **HTTPS header audit:** checks common browser security headers
+- **HTTPS header audit:** checks common browser security headers and blocks redirects that downgrade to plain HTTP
+- **Redirect safety tests:** offline tests verify HTTPS-only redirect behavior
 - **Offline passphrase audit:** heuristic feedback without saving the entered password
 - **Secure generator:** cryptographically random Wi-Fi passphrase generation
 - **Router checklist:** WPA2/WPA3 and router-hardening recommendations
