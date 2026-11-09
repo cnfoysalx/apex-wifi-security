@@ -1,6 +1,7 @@
 package com.apex.security
 
 import android.os.Bundle
+import android.content.Intent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -14,6 +15,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -21,6 +23,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.InetAddress
+import java.net.Inet4Address
+import java.net.Socket
+import java.net.InetSocketAddress
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
 import java.net.NetworkInterface
 import java.security.SecureRandom
 import javax.net.ssl.SSLSocket
@@ -42,6 +49,9 @@ class MainActivity : ComponentActivity() {
 private fun ApexApp() {
     var output by remember { mutableStateOf("APEX is ready. Choose a security check.") }
     var host by remember { mutableStateOf("example.com") }
+    var subnet by remember { mutableStateOf("192.168.1.0/24") }
+    var targetIp by remember { mutableStateOf("192.168.1.1") }
+    val context = LocalContext.current
     var passphrase by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -86,6 +96,29 @@ private fun ApexApp() {
                         "Use a separate guest network"
                     ).mapIndexed { i, s -> "${i + 1}. $s" }.joinToString("\n")
                 }
+            }
+            Text("ENTERPRISE LAN INVENTORY", color = Accent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            OutlinedTextField(
+                value = subnet, onValueChange = { subnet = it }, label = { Text("Private LAN subnet (e.g. 192.168.1.0/24)") },
+                modifier = Modifier.fillMaxWidth(), singleLine = true
+            )
+            ActionButton("Discover LAN devices", Modifier.fillMaxWidth(), busy) {
+                runCheck(scope, { discoverLan(subnet) }, { output = it }, { busy = it })
+            }
+            OutlinedTextField(
+                value = targetIp, onValueChange = { targetIp = it }, label = { Text("Private IPv4 target for port audit") },
+                modifier = Modifier.fillMaxWidth(), singleLine = true
+            )
+            ActionButton("Audit common TCP ports", Modifier.fillMaxWidth(), busy) {
+                runCheck(scope, { portAudit(targetIp) }, { output = it }, { busy = it })
+            }
+            ActionButton("Share current report", Modifier.fillMaxWidth(), busy) {
+                val share = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_SUBJECT, "APEX Enterprise Security Report")
+                    putExtra(Intent.EXTRA_TEXT, output)
+                }
+                context.startActivity(Intent.createChooser(share, "Share APEX report"))
             }
             Text("WEBSITE CHECKS", color = Accent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
             OutlinedTextField(
@@ -219,4 +252,55 @@ private fun securePassphrase(): String {
         chars[j] = temp
     }
     return chars.joinToString("")
+}
+
+
+private fun isPrivateAddress(ip: Inet4Address): Boolean {
+    val b = ip.address.map { it.toInt() and 0xff }
+    return b[0] == 10 || (b[0] == 172 && b[1] in 16..31) || (b[0] == 192 && b[1] == 168)
+}
+
+private fun tcpConnects(host: String, port: Int): Boolean = try {
+    Socket().use { it.connect(InetSocketAddress(host, port), 300) }
+    true
+} catch (_: Exception) { false }
+
+private fun discoverLan(input: String): String {
+    val parts = input.trim().split("/")
+    require(parts.size == 2 && parts[1] == "24") { "Enter a private IPv4 /24 subnet, e.g. 192.168.1.0/24." }
+    val network = InetAddress.getByName(parts[0]) as? Inet4Address ?: error("IPv4 required.")
+    require(isPrivateAddress(network)) { "Only private RFC1918 IPv4 ranges are allowed." }
+    val b = network.address
+    require((b[3].toInt() and 0xff) == 0) { "Use the network address ending in .0/24." }
+    val prefix = "\${b[0].toInt() and 255}.\${b[1].toInt() and 255}.\${b[2].toInt() and 255}"
+    val local = NetworkInterface.getNetworkInterfaces().toList().flatMap { it.inetAddresses.toList() }
+        .filterIsInstance<Inet4Address>().mapNotNull { it.hostAddress }.toSet()
+    val pool = Executors.newFixedThreadPool(32)
+    try {
+        val tasks = (1..254).filter { "$prefix.$it" !in local }.map { n ->
+            Callable {
+                val ip = "$prefix.$n"
+                val ports = listOf(22, 80, 443, 445, 8080, 8443).filter { tcpConnects(ip, it) }
+                if (ports.isEmpty()) null else "$ip  |  TCP open: \${ports.joinToString(",")}"
+            }
+        }
+        val found = pool.invokeAll(tasks).mapNotNull { it.get() }
+        "LAN INVENTORY: $input\\nResponsive hosts: \${found.size}\\n\\n" +
+            (if (found.isEmpty()) "No hosts responded on the tested ports. Firewalls may hide active devices." else found.joinToString("\\n")) +
+            "\\n\\nOnly the explicitly entered private /24 was checked. This is not a full device census."
+    } finally { pool.shutdownNow() }
+}
+
+private fun portAudit(input: String): String {
+    val ip = InetAddress.getByName(input.trim()) as? Inet4Address ?: error("Enter a private IPv4 address.")
+    require(isPrivateAddress(ip)) { "Port audit is restricted to private RFC1918 IPv4 addresses." }
+    val ports = listOf(22, 53, 80, 443, 445, 8080, 8443)
+    val open = ports.filter { tcpConnects(ip.hostAddress, it) }
+    return "TARGET: \${ip.hostAddress}\\nCHECKED TCP: \${ports.joinToString(", ")}\\nOPEN: \${if (open.isEmpty()) "None detected" else open.joinToString(", ")}\\n\\nAn open port is not automatically a vulnerability. Verify the service and restrict unnecessary exposure."
+}
+
+private fun <T> java.util.Enumeration<T>.toList(): List<T> {
+    val values = mutableListOf<T>()
+    while (hasMoreElements()) values += nextElement()
+    return values
 }
