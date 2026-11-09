@@ -272,7 +272,7 @@ private fun discoverLan(input: String): String {
     require(isPrivateAddress(network)) { "Only private RFC1918 IPv4 ranges are allowed." }
     val b = network.address
     require((b[3].toInt() and 0xff) == 0) { "Use the network address ending in .0/24." }
-    val prefix = "\${b[0].toInt() and 255}.\${b[1].toInt() and 255}.\${b[2].toInt() and 255}"
+    val prefix = "${b[0].toInt() and 255}.${b[1].toInt() and 255}.${b[2].toInt() and 255}"
     val local = NetworkInterface.getNetworkInterfaces().toList().flatMap { it.inetAddresses.toList() }
         .filterIsInstance<Inet4Address>().mapNotNull { it.hostAddress }.toSet()
     val pool = Executors.newFixedThreadPool(32)
@@ -281,13 +281,13 @@ private fun discoverLan(input: String): String {
             Callable {
                 val ip = "$prefix.$n"
                 val ports = listOf(22, 80, 443, 445, 8080, 8443).filter { tcpConnects(ip, it) }
-                if (ports.isEmpty()) null else "$ip  |  TCP open: \${ports.joinToString(",")}"
+                if (ports.isEmpty()) null else "$ip  |  TCP open: ${ports.joinToString(",")}"
             }
         }
         val found = pool.invokeAll(tasks).mapNotNull { it.get() }
-        "LAN INVENTORY: $input\\nResponsive hosts: \${found.size}\\n\\n" +
-            (if (found.isEmpty()) "No hosts responded on the tested ports. Firewalls may hide active devices." else found.joinToString("\\n")) +
-            "\\n\\nOnly the explicitly entered private /24 was checked. This is not a full device census."
+        "LAN INVENTORY: $input\nResponsive hosts: ${found.size}\n\n" +
+            (if (found.isEmpty()) "No hosts responded on the tested ports. Firewalls may hide active devices." else found.joinToString("\n")) +
+            "\n\nOnly the explicitly entered private /24 was checked. This is not a full device census."
     } finally { pool.shutdownNow() }
 }
 
@@ -296,7 +296,7 @@ private fun portAudit(input: String): String {
     require(isPrivateAddress(ip)) { "Port audit is restricted to private RFC1918 IPv4 addresses." }
     val ports = listOf(22, 53, 80, 443, 445, 8080, 8443)
     val open = ports.filter { tcpConnects(ip.hostAddress, it) }
-    return "TARGET: \${ip.hostAddress}\\nCHECKED TCP: \${ports.joinToString(", ")}\\nOPEN: \${if (open.isEmpty()) "None detected" else open.joinToString(", ")}\\n\\nAn open port is not automatically a vulnerability. Verify the service and restrict unnecessary exposure."
+    return "TARGET: ${ip.hostAddress}\nCHECKED TCP: ${ports.joinToString(", ")}\nOPEN: ${if (open.isEmpty()) "None detected" else open.joinToString(", ")}\n\nAn open port is not automatically a vulnerability. Verify the service and restrict unnecessary exposure."
 }
 
 private fun <T> java.util.Enumeration<T>.toList(): List<T> {
