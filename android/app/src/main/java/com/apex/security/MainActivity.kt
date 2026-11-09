@@ -212,6 +212,5 @@ private fun securePassphrase(): String {
     val all = groups.joinToString("")
     val chars = groups.map { it[random.nextInt(it.length)] }.toMutableList()
     repeat(20) { chars += all[random.nextInt(all.length)] }
-    chars.shuffle(random)
-    return chars.joinToString("")
+    for (i in chars.lastIndex downTo 1) {\n        val j = random.nextInt(i + 1)\n        val temp = chars[i]\n        chars[i] = chars[j]\n        chars[j] = temp\n    }\n    return chars.joinToString("")
 }
