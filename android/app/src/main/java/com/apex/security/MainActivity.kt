@@ -276,7 +276,7 @@ private fun discoverLan(input: String): String {
     val local = NetworkInterface.getNetworkInterfaces().toList().flatMap { it.inetAddresses.toList() }
         .filterIsInstance<Inet4Address>().mapNotNull { it.hostAddress }.toSet()
     val pool = Executors.newFixedThreadPool(32)
-    try {
+    return try {
         val tasks = (1..254).filter { "$prefix.$it" !in local }.map { n ->
             Callable {
                 val ip = "$prefix.$n"
