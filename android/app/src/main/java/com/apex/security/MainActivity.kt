@@ -67,7 +67,7 @@ private fun ApexApp() {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("APEX", color = Accent, fontSize = 30.sp, fontWeight = FontWeight.Black)
-                    Text("ANDROID SECURITY AUDITOR  •  v1.0", color = Muted, fontSize = 11.sp)
+                    Text("ENTERPRISE SECURITY ASSESSMENT  •  v2.0", color = Muted, fontSize = 11.sp)
                 }
                 Surface(color = Color(0xFF123A30), shape = RoundedCornerShape(50)) {
                     Text("● READY", color = Accent, modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp), fontSize = 11.sp)
