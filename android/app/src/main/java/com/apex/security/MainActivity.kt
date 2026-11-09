@@ -2,6 +2,8 @@ package com.apex.security
 
 import android.os.Bundle
 import android.content.Intent
+import android.content.Context
+import android.net.wifi.WifiManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -80,6 +82,11 @@ private fun ApexApp() {
                     Text("Read-only diagnostics for networks and websites you own or are authorized to assess.", color = Muted, fontSize = 13.sp)
                 }
             }
+            Text("WI-FI SECURITY ANALYZER", color = Accent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            ActionButton("Analyze current Wi-Fi connection", Modifier.fillMaxWidth(), busy) {
+                runCheck(scope, { wifiLinkSummary(context) }, { output = it }, { busy = it })
+            }
+            Text("Checks current Wi-Fi link quality, frequency band, channel and signal. It does not disconnect or modify the router.", color = Muted, fontSize = 11.sp)
             Text("NETWORK DIAGNOSTICS", color = Accent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 ActionButton("Network info", Modifier.weight(1f), busy) {
@@ -185,6 +192,56 @@ private fun runCheck(
         val result = withContext(Dispatchers.IO) { runCatching { task() }.getOrElse { "Check failed: ${it.message ?: "unknown error"}" } }
         onResult(result)
         onBusy(false)
+    }
+}
+
+@Suppress("DEPRECATION")
+private fun wifiLinkSummary(context: Context): String {
+    val manager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+    require(manager.isWifiEnabled) { "Wi-Fi is turned off. Turn it on and try again." }
+    val info = manager.connectionInfo
+    val rssi = info.rssi
+    val frequency = info.frequency
+    val channel = when {
+        frequency in 2412..2472 -> (frequency - 2407) / 5
+        frequency == 2484 -> 14
+        frequency in 5000..5895 -> (frequency - 5000) / 5
+        frequency in 5955..7115 -> (frequency - 5950) / 5
+        else -> null
+    }
+    val band = when {
+        frequency in 2400..2500 -> "2.4 GHz"
+        frequency in 4900..5900 -> "5 GHz"
+        frequency in 5925..7125 -> "6 GHz"
+        else -> "Unknown"
+    }
+    val signal = when {
+        rssi >= -50 -> "Excellent"
+        rssi >= -60 -> "Very good"
+        rssi >= -67 -> "Good"
+        rssi >= -70 -> "Fair"
+        rssi > -90 -> "Weak"
+        else -> "Unavailable / very weak"
+    }
+    val ssid = info.ssid?.removeSurrounding("\"")?.takeIf { it.isNotBlank() && it != "<unknown ssid>" } ?: "Hidden by Android privacy"
+    val bssid = info.bssid?.takeIf { it != "02:00:00:00:00:00" } ?: "Hidden by Android privacy"
+    return buildString {
+        appendLine("CURRENT WI-FI LINK")
+        appendLine("SSID: $ssid")
+        appendLine("BSSID: $bssid")
+        appendLine("SIGNAL: $signal ($rssi dBm)")
+        appendLine("BAND: $band")
+        appendLine("FREQUENCY: \${if (frequency > 0) "$frequency MHz" else "Unavailable"}")
+        appendLine("CHANNEL: \${channel?.toString() ?: "Unavailable"}")
+        appendLine("LINK SPEED: \${if (info.linkSpeed > 0) "$\{info.linkSpeed} Mbps" else "Unavailable"}")
+        appendLine()
+        appendLine("TUNING TIPS")
+        if (rssi < -67) appendLine("- Move closer to the access point or reduce obstructions.")
+        if (band == "2.4 GHz") appendLine("- For performance, compare less-congested 1/6/11 channels; use 5 GHz when supported.")
+        if (band == "5 GHz" || band == "6 GHz") appendLine("- Higher bands can be faster but have shorter range through walls.")
+        appendLine("- Prefer WPA3-Personal or WPA2-AES; disable WPS if not needed.")
+        appendLine()
+        appendLine("Note: Android may hide SSID/BSSID. This check does not determine router encryption or detect every nearby network.")
     }
 }
 
