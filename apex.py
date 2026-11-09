@@ -1,63 +1,60 @@
 #!/usr/bin/env python3
 """
-APEX Wi-Fi Security Toolkit v5.0
-Defensive diagnostics for networks you own or are authorized to assess.
-No password cracking, packet capture, deauthentication, or credential attacks.
-Python 3 standard library only; Termux-friendly.
+APEX v6.0 - Advanced Network Security Auditor
+Defensive, non-destructive checks for systems and websites you are authorized to assess.
+Python standard library only. No Wi-Fi cracking, packet capture, deauthentication,
+credential attacks, exploitation, or stealth scanning.
 """
 from __future__ import annotations
 
 import argparse
+import getpass
 import ipaddress
 import json
 import math
-import os
 import platform
 import secrets
 import socket
+import ssl
 import string
-import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
+from urllib.parse import urlparse
 
-VERSION = "5.0.0"
+VERSION = "6.0.0"
 REPORT_DIR = Path("reports")
 COMMON_PASSWORDS = {
     "password", "password123", "12345678", "123456789", "qwerty123",
     "admin123", "iloveyou", "welcome123", "letmein123", "11111111",
-    "00000000", "abcdefgh", "qwertyuiop"
+    "00000000", "abcdefgh", "qwertyuiop", "adminadmin"
 }
 WEAK_PATTERNS = ("1234", "abcd", "qwerty", "asdf", "password", "admin")
+SECURITY_HEADERS = {
+    "strict-transport-security": "Enforces HTTPS for future visits",
+    "content-security-policy": "Restricts where page content can load from",
+    "x-content-type-options": "Helps prevent MIME-type sniffing",
+    "referrer-policy": "Controls referrer information sent to other sites",
+    "permissions-policy": "Restricts browser features such as camera and microphone",
+    "frame-protection": "Helps reduce clickjacking risk (CSP frame-ancestors or X-Frame-Options)"
+}
 
 
 def banner() -> None:
     print(r"""
-    █████╗ ██████╗ ███████╗██╗  ██╗
-   ██╔══██╗██╔══██╗██╔════╝╚██╗██╔╝
-   ███████║██████╔╝█████╗   ╚███╔╝
-   ██╔══██║██╔═══╝ ██╔══╝   ██╔██╗
-   ██║  ██║██║     ███████╗██╔╝ ██╗
-   ╚═╝  ╚═╝╚═╝     ╚══════╝╚═╝  ╚═╝
-          Wi-Fi DEFENSE TOOLKIT
+     █████╗ ██████╗ ███████╗██╗  ██╗
+    ██╔══██╗██╔══██╗██╔════╝╚██╗██╔╝
+    ███████║██████╔╝█████╗   ╚███╔╝
+    ██╔══██║██╔═══╝ ██╔══╝   ██╔██╗
+    ██║  ██║██║     ███████╗██╔╝ ██╗
+    ╚═╝  ╚═╝╚═╝     ╚══════╝╚═╝  ╚═╝
+       ADVANCED NETWORK SECURITY AUDITOR
     """)
-    print(f"  APEX v{VERSION} | Authorized defensive use only\n")
-
-
-def default_route_gateway() -> str | None:
-    """Read Android/Linux IPv4 route table without changing device settings."""
-    route_file = Path("/proc/net/route")
-    try:
-        lines = route_file.read_text(errors="ignore").splitlines()[1:]
-        for line in lines:
-            fields = line.split()
-            if len(fields) > 3 and fields[1] == "00000000":
-                raw = bytes.fromhex(fields[2])
-                return socket.inet_ntoa(raw[::-1])
-    except (OSError, ValueError, IndexError):
-        pass
-    return None
+    print(f" APEX v{VERSION} | Authorized defensive use only\n")
 
 
 def local_ip() -> str | None:
@@ -71,136 +68,195 @@ def local_ip() -> str | None:
         sock.close()
 
 
-def network_info() -> dict:
+def default_gateway() -> str | None:
+    try:
+        lines = Path("/proc/net/route").read_text(errors="ignore").splitlines()[1:]
+        for line in lines:
+            cols = line.split()
+            if len(cols) > 3 and cols[1] == "00000000":
+                return socket.inet_ntoa(bytes.fromhex(cols[2])[::-1])
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def network_report() -> dict[str, Any]:
     ip = local_ip()
-    gateway = default_route_gateway()
-    info = {
-        "local_ip": ip,
-        "gateway": gateway,
+    try:
+        subnet = str(ipaddress.ip_network(ip + "/24", strict=False)) if ip else None
+    except ValueError:
+        subnet = None
+    neighbors = []
+    try:
+        for line in Path("/proc/net/arp").read_text(errors="ignore").splitlines()[1:]:
+            cols = line.split()
+            if len(cols) >= 6 and cols[3] != "00:00:00:00:00:00":
+                neighbors.append({"ip": cols[0], "mac": cols[3].lower(), "interface": cols[5]})
+    except OSError:
+        pass
+    return {
         "hostname": socket.gethostname(),
         "platform": platform.platform(),
         "python": platform.python_version(),
+        "local_ip": ip,
+        "default_gateway": default_gateway(),
+        "estimated_subnet": subnet,
+        "neighbor_cache": neighbors,
+        "neighbor_cache_note": "Read-only OS cache; not a full device scan."
     }
-    if ip:
-        try:
-            info["likely_subnet"] = str(ipaddress.ip_network(ip + "/24", strict=False))
-        except ValueError:
-            info["likely_subnet"] = None
-    else:
-        info["likely_subnet"] = None
-    return info
 
 
-def check_dns(host: str = "example.com") -> dict:
+def dns_audit(host: str) -> dict[str, Any]:
     started = time.perf_counter()
     try:
-        answers = sorted({item[4][0] for item in socket.getaddrinfo(host, None)})
+        records = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+        addresses = sorted({entry[4][0] for entry in records})
         return {
-            "ok": True,
-            "host": host,
-            "addresses": answers,
-            "latency_ms": round((time.perf_counter() - started) * 1000, 2),
+            "ok": True, "hostname": host, "addresses": addresses,
+            "lookup_ms": round((time.perf_counter() - started) * 1000, 2)
         }
-    except OSError as exc:
-        return {"ok": False, "host": host, "error": str(exc)}
+    except (OSError, UnicodeError) as exc:
+        return {"ok": False, "hostname": host, "error": str(exc)}
 
 
-def check_tcp(host: str, port: int = 443, timeout: float = 3.0) -> dict:
+def tls_audit(host: str, port: int = 443, timeout: float = 5.0) -> dict[str, Any]:
+    context = ssl.create_default_context()
     started = time.perf_counter()
     try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return {
-                "ok": True, "host": host, "port": port,
-                "latency_ms": round((time.perf_counter() - started) * 1000, 2)
-            }
-    except OSError as exc:
-        return {"ok": False, "host": host, "port": port, "error": str(exc)}
+        with socket.create_connection((host, port), timeout=timeout) as raw:
+            with context.wrap_socket(raw, server_hostname=host) as tls:
+                cert = tls.getpeercert()
+                cipher = tls.cipher()
+                expires = cert.get("notAfter")
+                days_left = None
+                if expires:
+                    expiry = datetime.strptime(expires, "%b %d %H:%M:%S %Y %Z").replace(tzinfo=timezone.utc)
+                    days_left = (expiry - datetime.now(timezone.utc)).days
+                return {
+                    "ok": True,
+                    "hostname": host,
+                    "port": port,
+                    "tls_version": tls.version(),
+                    "cipher": cipher[0] if cipher else None,
+                    "certificate_subject": cert.get("subject"),
+                    "certificate_issuer": cert.get("issuer"),
+                    "certificate_expires": expires,
+                    "certificate_days_remaining": days_left,
+                    "handshake_ms": round((time.perf_counter() - started) * 1000, 2),
+                    "verification": "System certificate validation succeeded"
+                }
+    except (OSError, ssl.SSLError, ValueError) as exc:
+        return {
+            "ok": False, "hostname": host, "port": port,
+            "error": str(exc),
+            "note": "Connection or certificate validation failed; investigate before trusting this host."
+        }
 
 
-def read_neighbor_table() -> list[dict]:
-    """Read the OS neighbor cache only; does not probe or scan other devices."""
-    entries = []
-    for file_path in (Path("/proc/net/arp"), Path("/proc/net/ndisc_cache")):
-        try:
-            lines = file_path.read_text(errors="ignore").splitlines()
-        except OSError:
-            continue
-        if file_path.name == "arp":
-            for line in lines[1:]:
-                cols = line.split()
-                if len(cols) >= 6 and cols[3] != "00:00:00:00:00:00":
-                    entries.append({
-                        "ip": cols[0], "mac": cols[3].lower(),
-                        "interface": cols[5], "source": "ARP cache"
-                    })
-    return entries
+def normalize_https_url(value: str) -> tuple[str, str]:
+    parsed = urlparse(value if "://" in value else "https://" + value)
+    if parsed.scheme.lower() != "https":
+        raise ValueError("Only HTTPS URLs are accepted by the web audit.")
+    if not parsed.hostname:
+        raise ValueError("A valid hostname is required.")
+    if parsed.username or parsed.password:
+        raise ValueError("URLs containing embedded credentials are not accepted.")
+    return parsed.geturl(), parsed.hostname
 
 
-def estimate_entropy(password: str) -> tuple[float, int]:
-    """Heuristic only: estimated search-space entropy, not crack-time prediction."""
+def web_security_audit(url: str, timeout: float = 8.0) -> dict[str, Any]:
+    normalized, host = normalize_https_url(url)
+    request = urllib.request.Request(
+        normalized,
+        headers={"User-Agent": "APEX-Security-Auditor/6.0 (defensive-check)"},
+        method="GET"
+    )
+    started = time.perf_counter()
+    try:
+        with urllib.request.urlopen(request, timeout=timeout, context=ssl.create_default_context()) as response:
+            headers = {key.lower(): value for key, value in response.headers.items()}
+            status = response.status
+            final_url = response.geturl()
+    except urllib.error.HTTPError as exc:
+        headers = {key.lower(): value for key, value in exc.headers.items()}
+        status = exc.code
+        final_url = exc.geturl()
+    except (urllib.error.URLError, OSError, ssl.SSLError, ValueError) as exc:
+        return {"ok": False, "url": normalized, "hostname": host, "error": str(exc)}
+
+    checks = []
+    for key, purpose in SECURITY_HEADERS.items():
+        if key == "frame-protection":
+            present = "content-security-policy" in headers and "frame-ancestors" in headers.get("content-security-policy", "").lower()
+            present = present or "x-frame-options" in headers
+        else:
+            present = key in headers
+        checks.append({
+            "header": key,
+            "present": present,
+            "purpose": purpose,
+            "value": headers.get(key) if key in headers else None
+        })
+    return {
+        "ok": True,
+        "requested_url": normalized,
+        "final_url": final_url,
+        "hostname": host,
+        "http_status": status,
+        "response_ms": round((time.perf_counter() - started) * 1000, 2),
+        "security_headers": checks,
+        "missing_headers": [item["header"] for item in checks if not item["present"]],
+        "note": "Informational header review only; missing headers are not proof of exploitability."
+    }
+
+
+def password_entropy(password: str) -> tuple[float, int]:
     pool = 0
-    if any(c.islower() for c in password):
-        pool += 26
-    if any(c.isupper() for c in password):
-        pool += 26
-    if any(c.isdigit() for c in password):
-        pool += 10
-    if any(c in string.punctuation for c in password):
-        pool += len(string.punctuation)
-    if any(c.isspace() for c in password):
-        pool += 1
-    bits = len(password) * math.log2(pool) if pool else 0.0
-    return round(bits, 1), pool
+    for test, size in (
+        (str.islower, 26), (str.isupper, 26), (str.isdigit, 10),
+        (lambda s: any(c in string.punctuation for c in s), len(string.punctuation)),
+        (str.isspace, 1)
+    ):
+        if test(password):
+            pool += size
+    return (round(len(password) * math.log2(pool), 1) if pool else 0.0, pool)
 
 
-def audit_passphrase(password: str) -> dict:
-    bits, pool = estimate_entropy(password)
+def password_audit(password: str) -> dict[str, Any]:
+    bits, pool = password_entropy(password)
     findings = []
-    lowered = password.lower()
-
+    low = password.lower()
     if len(password) < 8:
-        findings.append("Below the 8-character WPA2/WPA3 passphrase minimum.")
+        findings.append("Below the WPA2/WPA3 passphrase minimum of 8 characters.")
     if len(password) > 63:
-        findings.append("Over the 63-character passphrase limit; use a 64-hex PSK only if your router explicitly supports it.")
-    if lowered in COMMON_PASSWORDS:
-        findings.append("Matches a commonly used weak password.")
-    if any(pattern in lowered for pattern in WEAK_PATTERNS):
+        findings.append("Exceeds the 63-character passphrase limit.")
+    if low in COMMON_PASSWORDS:
+        findings.append("Matches a common weak password.")
+    if any(part in low for part in WEAK_PATTERNS):
         findings.append("Contains a predictable word or sequence.")
     if len(set(password)) <= 2 and password:
-        findings.append("Uses too few distinct characters.")
+        findings.append("Contains too few distinct characters.")
     if password and (password.isalpha() or password.isdigit()):
         findings.append("Uses only letters or only digits.")
     if password and password.strip() != password:
-        findings.append("Has leading or trailing whitespace; this can cause connection problems.")
-
-    if len(password) >= 16 and bits >= 80 and not findings:
-        rating = "Strong (heuristic)"
-    elif len(password) >= 12 and bits >= 60 and not findings:
-        rating = "Moderate (heuristic)"
-    else:
-        rating = "Weak / needs improvement"
-
+        findings.append("Has leading or trailing whitespace.")
+    rating = "Strong (heuristic)" if len(password) >= 16 and bits >= 80 and not findings else (
+        "Moderate (heuristic)" if len(password) >= 12 and bits >= 60 and not findings else "Weak / improve"
+    )
     return {
-        "rating": rating,
-        "length": len(password),
-        "estimated_entropy_bits": bits,
-        "character_pool_estimate": pool,
-        "findings": findings or ["No obvious weak patterns detected by this basic check."],
-        "note": "This is a local heuristic, not a password-cracking test or guarantee of security."
+        "rating": rating, "length": len(password),
+        "estimated_entropy_bits": bits, "character_pool_estimate": pool,
+        "findings": findings or ["No obvious weak patterns detected."],
+        "warning": "Heuristic estimate only; not a crack-time prediction or guarantee."
     }
 
 
-def generate_passphrase(length: int = 24) -> str:
+def generate_password(length: int = 24) -> str:
     if not 16 <= length <= 63:
-        raise ValueError("Choose a length between 16 and 63.")
-    alphabet = string.ascii_letters + string.digits + "!@#$%^&*()-_=+"
-    # Ensure at least one character from each major class.
-    chars = [
-        secrets.choice(string.ascii_lowercase),
-        secrets.choice(string.ascii_uppercase),
-        secrets.choice(string.digits),
-        secrets.choice("!@#$%^&*()-_=+"),
-    ]
+        raise ValueError("Length must be between 16 and 63.")
+    groups = [string.ascii_lowercase, string.ascii_uppercase, string.digits, "!@#$%^&*()-_=+"]
+    alphabet = "".join(groups)
+    chars = [secrets.choice(group) for group in groups]
     chars.extend(secrets.choice(alphabet) for _ in range(length - len(chars)))
     secrets.SystemRandom().shuffle(chars)
     return "".join(chars)
@@ -208,104 +264,109 @@ def generate_passphrase(length: int = 24) -> str:
 
 def router_checklist() -> list[str]:
     return [
-        "Use WPA3-Personal where supported; otherwise WPA2-AES/CCMP.",
-        "Disable WPS if you do not specifically need it.",
-        "Change the router administrator password from its factory default.",
-        "Install firmware updates from the router manufacturer's official source.",
-        "Disable remote administration unless it is essential.",
-        "Review connected devices and remove unknown devices through the router's official app/admin page.",
-        "Use a separate guest network for visitors and smart-home/IoT devices when available.",
-        "Use a unique Wi-Fi passphrase; do not reuse email or social-media passwords.",
+        "Prefer WPA3-Personal; otherwise use WPA2-AES/CCMP.",
+        "Disable WPS if it is not required.",
+        "Replace the router administrator password with a unique strong password.",
+        "Install firmware only from the manufacturer's official update mechanism.",
+        "Disable remote administration unless there is a clear need.",
+        "Review connected devices in the router's official administration interface.",
+        "Use a separate guest network for visitors and untrusted IoT devices.",
+        "Use a unique Wi-Fi passphrase and keep it private.",
+        "Change default SSID if it exposes router model or personal details.",
+        "Back up router configuration securely after making changes."
     ]
 
 
-def save_report(data: dict) -> Path:
-    REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    path = REPORT_DIR / f"apex_report_{stamp}.json"
-    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    return path
-
-
-def run_diagnostics() -> dict:
+def make_full_report() -> dict[str, Any]:
+    net = network_report()
+    gateway = net.get("default_gateway")
     return {
         "tool": "APEX",
         "version": VERSION,
         "generated_utc": datetime.now(timezone.utc).isoformat(),
-        "network": network_info(),
-        "dns": check_dns(),
-        "internet_tcp_443": check_tcp("1.1.1.1", 443),
-        "neighbor_cache": read_neighbor_table(),
-        "router_security_checklist": router_checklist(),
-        "privacy": "No passwords or Wi-Fi credentials are collected or stored."
+        "network": net,
+        "dns": dns_audit("example.com"),
+        "internet_connectivity": tls_audit("1.1.1.1", 443),
+        "gateway_connectivity": tls_audit(gateway, 443) if gateway else {
+            "ok": False, "note": "No default gateway detected; skipped."
+        },
+        "router_hardening_checklist": router_checklist(),
+        "privacy": "No Wi-Fi passwords or credentials are collected or stored."
     }
 
 
-def print_menu() -> None:
-    print(" [1] Network & gateway information")
-    print(" [2] DNS and internet connectivity test")
-    print(" [3] View local neighbor cache")
-    print(" [4] Offline Wi-Fi passphrase audit")
-    print(" [5] Generate secure Wi-Fi passphrase")
-    print(" [6] Router security checklist")
-    print(" [7] Run all diagnostics and save JSON report")
-    print(" [0] Exit")
+def save_report(data: dict[str, Any]) -> Path:
+    REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    name = "apex_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".json"
+    path = REPORT_DIR / name
+    path.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+    return path
+
+
+def print_json(data: Any) -> None:
+    print(json.dumps(data, indent=2, default=str))
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="APEX defensive Wi-Fi toolkit")
-    parser.add_argument("--diagnose", action="store_true", help="run diagnostics and save a JSON report")
+    parser = argparse.ArgumentParser(
+        description="APEX v6.0 defensive network auditor",
+        epilog="Only assess networks and websites you own or are authorized to test."
+    )
+    sub = parser.add_subparsers(dest="command")
+    sub.add_parser("network", help="show local IP, gateway and cached neighbors")
+    dns_parser = sub.add_parser("dns", help="resolve a hostname")
+    dns_parser.add_argument("host")
+    tls_parser = sub.add_parser("tls", help="validate a host TLS certificate")
+    tls_parser.add_argument("host")
+    web_parser = sub.add_parser("web", help="audit HTTPS security response headers")
+    web_parser.add_argument("url")
+    pass_parser = sub.add_parser("password", help="offline passphrase strength check")
+    gen_parser = sub.add_parser("generate", help="generate a secure passphrase")
+    gen_parser.add_argument("--length", type=int, default=24)
+    sub.add_parser("checklist", help="show router hardening checklist")
+    sub.add_parser("diagnose", help="run diagnostics and save a JSON report")
     parser.add_argument("--version", action="version", version=f"APEX {VERSION}")
     args = parser.parse_args()
 
     banner()
-    if args.diagnose:
-        data = run_diagnostics()
-        print(json.dumps(data, indent=2))
-        print(f"\nReport saved: {save_report(data)}")
-        return 0
-
-    while True:
-        print_menu()
-        choice = input("\nAPEX > ").strip()
-        if choice == "1":
-            print(json.dumps(network_info(), indent=2))
-        elif choice == "2":
-            print("DNS:", json.dumps(check_dns(), indent=2))
-            print("Internet:", json.dumps(check_tcp("1.1.1.1", 443), indent=2))
-        elif choice == "3":
-            print(json.dumps(read_neighbor_table(), indent=2))
-            print("Note: this is only the OS cache; an empty list does not mean no devices are connected.")
-        elif choice == "4":
-            secret = input("Enter passphrase locally (input is not saved): ")
-            print(json.dumps(audit_passphrase(secret), indent=2))
-            del secret
-        elif choice == "5":
-            try:
-                length = int(input("Length (16-63, default 24): ").strip() or "24")
-                print("\nGenerated passphrase (save it securely):")
-                print(generate_passphrase(length))
-                print("Do not paste this password into chat or commit it to GitHub.")
-            except ValueError as exc:
-                print(f"Error: {exc}")
-        elif choice == "6":
-            for number, item in enumerate(router_checklist(), 1):
-                print(f"{number}. {item}")
-        elif choice == "7":
-            data = run_diagnostics()
-            path = save_report(data)
-            print(f"\nDiagnostics complete. Report: {path}")
-            print("Review the report before sharing; it may contain local IP/MAC information.")
-        elif choice == "0":
-            print("APEX signing off. Stay secure!")
-            return 0
-        else:
-            print("Choose a valid menu number.")
+    if args.command == "network":
+        print_json(network_report())
+    elif args.command == "dns":
+        print_json(dns_audit(args.host))
+    elif args.command == "tls":
+        print_json(tls_audit(args.host))
+    elif args.command == "web":
+        try:
+            print_json(web_security_audit(args.url))
+        except ValueError as exc:
+            parser.error(str(exc))
+    elif args.command == "password":
+        entered = getpass.getpass("Passphrase (hidden; never saved): ")
+        print_json(password_audit(entered))
+        del entered
+    elif args.command == "generate":
+        try:
+            print("Generated passphrase (store it securely):")
+            print(generate_password(args.length))
+            print("Never commit or share this password.")
+        except ValueError as exc:
+            parser.error(str(exc))
+    elif args.command == "checklist":
+        for i, item in enumerate(router_checklist(), 1):
+            print(f"{i}. {item}")
+    elif args.command == "diagnose":
+        report = make_full_report()
+        print_json(report)
+        print(f"\nSaved report: {save_report(report)}")
+        print("Review local IP/MAC details before sharing the report.")
+    else:
+        parser.print_help()
+    return 0
 
 
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except KeyboardInterrupt:
-        print("\nInterrupted. Exiting safely.")
+        print("\nInterrupted safely.")
         raise SystemExit(130)
