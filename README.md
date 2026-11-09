@@ -1,41 +1,47 @@
 # APEX Wi-Fi Security Toolkit
 
-A Termux-friendly toolkit for **authorized, defensive Wi-Fi and network security checks**.
+**APEX v5.0** is a Termux-friendly, Python-standard-library toolkit for authorized, defensive Wi-Fi and network checks.
 
-## Project status
+## Features
 
-Initial repository scaffold. The next step is to add and test the APEX Python modules from the Termux project.
+- Local IP, default gateway, device and platform information
+- DNS resolution and outbound TCP connectivity checks
+- Read-only view of the operating system's ARP neighbor cache
+- Offline Wi-Fi passphrase strength heuristic
+- Cryptographically secure passphrase generator
+- Router hardening checklist
+- JSON diagnostics reports
 
-## Planned capabilities
-
-- Local network and gateway inventory
-- Connectivity, DNS, and latency diagnostics
-- Router security configuration checklist
-- Offline Wi-Fi passphrase strength assessment
-- Secure passphrase generation
-- JSON reports that do not store entered passwords
-
-## Safety scope
-
-Use this toolkit only on networks and devices you own or have explicit permission to assess.
-
-This project does not provide Wi-Fi password cracking, handshake capture, deauthentication, credential attacks, or unauthorized access features.
-
-## Environment
-
-Designed for Android Termux with Python 3.
+## Install on Android / Termux
 
 ```bash
 pkg update -y
 pkg install python git -y
 git clone https://github.com/cnfoysalx/apex-wifi-security.git
 cd apex-wifi-security
+python apex.py
 ```
+
+Run diagnostics directly:
+
+```bash
+python apex.py --diagnose
+```
+
+No third-party Python packages are required.
+
+## Important notes
+
+- Use only on networks and devices you own or are explicitly authorized to assess.
+- Neighbor information comes from the local OS cache; it is not a full device discovery scan.
+- Entropy and strength labels are estimates, not crack-time predictions or security guarantees.
+- Reports may contain local IP/MAC information. Review them before sharing.
+- Entered passphrases are checked locally and are not written to reports.
+
+## Safety scope
+
+APEX is a defensive auditing tool. It does not implement Wi-Fi password cracking, handshake capture, deauthentication, credential attacks, or unauthorized access.
 
 ## Development
 
-Contributions should preserve the defensive-only scope. Test changes on your own devices and avoid committing secrets, passwords, tokens, or private network data.
-
-## License
-
-License to be selected.
+Keep credentials, router passwords, tokens, private reports, and personal network data out of Git commits.
