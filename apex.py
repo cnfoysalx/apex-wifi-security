@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-APEX v6.0 - Advanced Network Security Auditor
+APEX v6.1 - Advanced Network Security Auditor
 Defensive, non-destructive checks for systems and websites you are authorized to assess.
 Python standard library only. No Wi-Fi cracking, packet capture, deauthentication,
 credential attacks, exploitation, or stealth scanning.
@@ -24,9 +24,9 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
-VERSION = "6.0.0"
+VERSION = "6.1.0"
 REPORT_DIR = Path("reports")
 COMMON_PASSWORDS = {
     "password", "password123", "12345678", "123456789", "qwerty123",
@@ -164,16 +164,32 @@ def normalize_https_url(value: str) -> tuple[str, str]:
     return parsed.geturl(), parsed.hostname
 
 
+class HTTPSOnlyRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Reject redirects that downgrade an HTTPS audit to plain HTTP."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        target = urlparse(urljoin(req.full_url, newurl))
+        if target.scheme.lower() != "https":
+            raise urllib.error.URLError("Blocked redirect: HTTPS audit cannot follow a non-HTTPS URL.")
+        if target.username or target.password:
+            raise urllib.error.URLError("Blocked redirect: embedded credentials are not accepted.")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def web_security_audit(url: str, timeout: float = 8.0) -> dict[str, Any]:
     normalized, host = normalize_https_url(url)
     request = urllib.request.Request(
         normalized,
-        headers={"User-Agent": "APEX-Security-Auditor/6.0 (defensive-check)"},
+        headers={"User-Agent": "APEX-Security-Auditor/6.1 (defensive-check)"},
         method="GET"
     )
     started = time.perf_counter()
     try:
-        with urllib.request.urlopen(request, timeout=timeout, context=ssl.create_default_context()) as response:
+        opener = urllib.request.build_opener(
+            HTTPSOnlyRedirectHandler(),
+            urllib.request.HTTPSHandler(context=ssl.create_default_context())
+        )
+        with opener.open(request, timeout=timeout) as response:
             headers = {key.lower(): value for key, value in response.headers.items()}
             status = response.status
             final_url = response.geturl()
@@ -309,7 +325,7 @@ def print_json(data: Any) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="APEX v6.0 defensive network auditor",
+        description="APEX v6.1 defensive network auditor",
         epilog="Only assess networks and websites you own or are authorized to test."
     )
     sub = parser.add_subparsers(dest="command")
