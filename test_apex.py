@@ -1,5 +1,7 @@
 """Offline unit tests for APEX. No network access is required."""
 import json
+import urllib.error
+import urllib.request
 import tempfile
 import unittest
 from pathlib import Path
@@ -25,6 +27,18 @@ class URLValidationTests(unittest.TestCase):
     def test_rejects_missing_hostname(self):
         with self.assertRaises(ValueError):
             apex.normalize_https_url("https://")
+
+    def test_blocks_https_to_http_redirect(self):
+        handler = apex.HTTPSOnlyRedirectHandler()
+        request = urllib.request.Request("https://example.com/start")
+        with self.assertRaises(urllib.error.URLError):
+            handler.redirect_request(request, None, 302, "Found", {}, "http://example.com/plain")
+
+    def test_allows_https_redirect(self):
+        handler = apex.HTTPSOnlyRedirectHandler()
+        request = urllib.request.Request("https://example.com/start")
+        redirected = handler.redirect_request(request, None, 302, "Found", {}, "https://example.com/next")
+        self.assertEqual(redirected.full_url, "https://example.com/next")
 
 
 class PasswordTests(unittest.TestCase):
